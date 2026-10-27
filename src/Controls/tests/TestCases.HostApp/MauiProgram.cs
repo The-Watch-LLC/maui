@@ -33,6 +33,7 @@ namespace Maui.Controls.Sample
 					fonts.AddFont("FontAwesome.ttf", "FA");
 					fonts.AddFont("ionicons.ttf", "Ion");
 					fonts.AddFont("Montserrat-Bold.otf", "MontserratBold");
+					fonts.AddFont("MyCustomFont.ttf", "MyCustomFont");
 				})
 				.RenderingPerformanceAddMappers()
 				.Issue21109AddMappers()
@@ -41,7 +42,9 @@ namespace Maui.Controls.Sample
 				.Issue18720DatePickerAddMappers()
 				.Issue18720TimePickerAddMappers()
 				.Issue28945AddMappers()
-				.Issue25436RegisterNavigationService();
+				.Issue25436RegisterNavigationService()
+				.Issue36853RegisterServices()
+				.Issue38361RegisterServices();
 
 #if IOS || MACCATALYST
 			appBuilder.ConfigureCollectionViewHandlers();
@@ -56,6 +59,8 @@ namespace Maui.Controls.Sample
 #endif
 #if IOS || MACCATALYST
 				handlers.AddHandler(typeof(Issue11132Control), typeof(Issue11132ControlHandler));
+				handlers.AddHandler(typeof(Issue36749Button), typeof(Issue36749ButtonHandler));
+				handlers.AddHandler(typeof(Issue39061), typeof(Issue39061NavigationRenderer));
 #endif
 #if IOS || MACCATALYST || ANDROID
 				handlers.AddHandler(typeof(UITestEditor), typeof(UITestEditorHandler));
@@ -67,6 +72,9 @@ namespace Maui.Controls.Sample
 #endif
 #if IOS || MACCATALYST || ANDROID || WINDOWS
 				handlers.AddHandler(typeof(Issue34310NativeHostView), typeof(Issue34310NativeHostViewHandler));
+#endif
+#if ANDROID
+				handlers.AddHandler(typeof(Issue7814TouchClaimView), typeof(Issue7814TouchClaimViewHandler));
 #endif
 			});
 
@@ -89,10 +97,16 @@ namespace Maui.Controls.Sample
 		{
 			Page mainPage = null;
 			OverrideMainPage(ref mainPage);
-#if MACCATALYST
-			// Check for startup test argument from environment variables (passed by test runner)
+#if ANDROID
+			var testName = Microsoft.Maui.ApplicationModel.Platform.CurrentActivity?.Intent?.GetStringExtra("test");
+#elif IOS || MACCATALYST
 			var testName = System.Environment.GetEnvironmentVariable("test");
-
+#elif WINDOWS
+			const string testArgument = "--test=";
+			var testName = Environment.GetCommandLineArgs()
+				.FirstOrDefault(argument => argument.StartsWith(testArgument, StringComparison.Ordinal))?[testArgument.Length..];
+#endif
+#if ANDROID || IOS || MACCATALYST || WINDOWS
 			if (!string.IsNullOrEmpty(testName))
 			{
 				// Try to get the test page directly from issues/test cases
@@ -112,6 +126,8 @@ namespace Maui.Controls.Sample
 					// Return the gallery page
 					return galleryPage;
 				}
+
+				Debug.WriteLine($"No test or gallery page found for startup test '{testName}'.");
 			}
 #endif
 			return mainPage ?? new CoreNavigationPage();

@@ -43,11 +43,82 @@ dotnet build ./src/Provisioning/Provisioning.csproj -t:ProvisionAppium -p:SkipAp
 - Set `JAVA_HOME` environment variable
 - Install Android API 30 SDK with x86/x64 emulator image
 
+#### Launch directly to a test page
+
+The Android HostApp accepts a `test` string intent extra containing the exact
+issue description (from `IssueAttribute`) or gallery title, matched
+case-insensitively. For example, after installing the HostApp:
+
+```bash
+adb shell am start -S -n com.microsoft.maui.uitests/com.microsoft.maui.uitests.MainActivity --es test '"Direct test launch"'
+```
+
+This creates the requested page as the initial window page without searching or
+tapping through the gallery. Use `-S` to stop the existing app before launching:
+the extra is read when the window is created, not when an already-running activity
+is brought to the foreground. Omit `--es test ...` for normal gallery startup.
+An empty or unrecognized test also opens the gallery; an unrecognized test is
+reported in debug output.
+
 ### iOS/MacCatalyst-Specific
 
 - macOS required
 - Xcode with command-line tools installed
 - iOS Simulator configured
+
+#### Launch directly on iOS
+
+iOS and MacCatalyst use the `test` environment variable with the same exact issue
+description or gallery title. After installing the iOS HostApp on a simulator:
+
+```bash
+SIMCTL_CHILD_test="Direct test launch" xcrun simctl launch --terminate-running-process <simulator-udid> com.microsoft.maui.uitests
+```
+
+For a manually launched MacCatalyst app, set `test` in the app process's environment.
+On Windows, pass the description or gallery title as one `--test=...` command-line
+argument:
+
+```powershell
+.\Controls.TestCases.HostApp.exe '--test=Direct test launch'
+```
+
+On all platforms, missing, empty, or unrecognized startup targets open the normal
+gallery. Unknown targets are reported in debug output. A startup target is consumed
+when the initial window is created, so terminate the previous app instance before
+changing it.
+
+### Direct launch in the UI test runner
+
+`_IssuesUITest` and `_GalleryUITest` configure their startup targets automatically
+on Android, iOS, and MacCatalyst.
+Fixture setup no longer searches for and taps the gallery's Go To Test button.
+Resets relaunch the current fixture's target, including fixtures that set
+`ResetAfterEachTest`; gallery subpage buttons are still selected after launch.
+Fixture teardown closes the app rather than launching an unused gallery.
+Tests of normal gallery startup can derive directly from `UITest` instead.
+
+Starting a new test and resetting the app stop with an explicit error if the
+previous app cannot be terminated. OS-command fallback termination succeeds only
+when the command starts, completes within its timeout, and exits with code zero; a failed command
+must not be treated as a successful close.
+
+Android, iOS, and MacCatalyst reuse the driver session and send the current target
+with each app launch. Android forwards the configured device UDID to Appium as
+well, so multiple running emulators do not select the wrong device. Windows uses
+`appArguments`; because WinAppDriver cannot change these capabilities on an
+existing session, changing the startup target recreates that session. Windows
+therefore retains gallery navigation by default until its native timing is
+validated; set `MAUI_UITEST_DIRECT_LAUNCH=true` to opt into direct fixture startup.
+Set it to `false` on any platform to compare the legacy navigation path.
+Do not infer a Windows speedup from eliminating gallery navigation alone.
+
+The startup argument, session reuse, and launch-command unit tests run without
+native UI automation:
+
+```bash
+dotnet test src/TestUtils/tests/UITest.Appium.Tests/UITest.Appium.Tests.csproj
+```
 
 ## Creating a UI Test
 
@@ -382,6 +453,71 @@ For rapid development and debugging, you can run specific tests directly:
 ### Full Test Suite: Using Cake Build System
 
 For comprehensive CI-like test runs:
+
+Android, iOS, MacCatalyst, and Windows CI runs retry once after a failure using
+the shared UI test runner. For an exact category group such as
+`TestCategory=Editor|TestCategory=Effects|TestCategory=Essentials`, the second
+attempt runs only the individual tests that failed, except for feature matrices.
+Exact NUnit `fullname` selectors distinguish parameterized cases and retain the
+original category/shard constraint. A generated `retry.runsettings` file uses
+`NUnit.Where` instead of a
+VSTest command-line filter, avoiding argument quoting and length limits.
+NUnit XML provides inherited fixture and method categories; only categories in
+the original group are selected. Missing, incomplete, unmappable, or ambiguous
+test names fall back to the original filter with a warning. Custom filters retain
+their original selection, and local runs do not retry. No extra retry is added.
+
+Feature-matrix fixtures follow the `*FeatureTests` class naming convention.
+When one fails, the retry selects that exact NUnit fixture instance, including
+passing prerequisite tests, so ordered navigation and shared application state
+are preserved. Other feature matrices and passing ordinary tests are not
+selected. The original category/shard constraint still applies: tests outside
+that lane are not added. This costs a full fixture rerun only after a failure,
+without adding per-test app resets or extra retry attempts. New feature matrices
+must retain this naming convention to receive fixture-level retries.
+
+Feature-matrix subpage navigation belongs in fixture setup, not an `Order(1)`
+test. Override `_GalleryUITest.GallerySubPageButton` with the entry button's
+AutomationId and remove the corresponding wait/tap from the first test. Setup
+then opens the subpage even when only a later method or a category shard is
+selected. This reuses the existing once-per-fixture navigation without enabling
+`ResetAfterEachTest`. Navigation setup alone does not remove other focus,
+flyout, data, or nested-navigation dependencies; whole-fixture retries preserve
+those existing ordered flows within the original shard. Tests should still
+establish their own prerequisites, particularly when split across shards or
+selected individually for local runs.
+
+Explicitly separated preparation and test-project build phases on Android, iOS,
+MacCatalyst, and Windows CI allow at most five total attempts per failed phase,
+before test execution starts. These retries do not restart completed tests.
+Local runs and device-test Cake targets do not retry these phases. Shared agent
+provisioning also uses bounded setup-only recovery; see
+[Setup-only retries](../.github/docs/maui-ci-facts.md#setup-only-retries) for its
+coverage and limits.
+
+NUnit XML is checked whether VSTest succeeds or throws. Fixture-only failures
+such as `OneTimeTearDown` errors in other fixtures still retry their affected
+categories because they cannot safely be attributed to individual tests. They
+are recorded as TRX run errors if they persist. Missing or malformed reports are
+logged without replacing an existing VSTest exception.
+
+The published TRX combines untouched first-attempt results with retry results.
+Failures not reported by the retry, or only skipped/inconclusive on retry, remain
+failures. Failed NUnit cases must be confirmed passed by complete retry NUnit XML
+for the same fully qualified name and assembly, even if VSTest reports success.
+Fixture errors are cleared
+only when retry NUnit XML confirms that the same fixture in the same assembly
+completed successfully; omitted, skipped, or incomplete fixtures remain run
+errors, even if all retained test cases passed.
+
+Available raw TRX and NUnit XML files are copied before XML parsing,
+reconciliation, or retry selection, including for full-filter retries. The
+first attempt's snapshots are under `nunit-<id>/raw/` and the retry's snapshots
+under `nunit-<id>/retry/raw/`, beneath the result directory. Retry output always
+uses a separate directory, even when the first TRX is missing or malformed.
+Only the combined top-level TRX is published; if the first TRX cannot be read,
+the retry TRX is published instead. If raw reports cannot be archived, the runner
+stops without retrying or overwriting the available evidence.
 
 **Android:**
 

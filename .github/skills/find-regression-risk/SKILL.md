@@ -1,3 +1,21 @@
+---
+name: find-regression-risk
+description: >-
+  Detects potential regression risks in a PR by cross-referencing lines the PR
+  REMOVES against lines ADDED by recent labeled bug-fix PRs (`i/regression`,
+  `t/bug`, `p/0`, `p/1`) touching the same files. Purely mechanical — no AI/LLM.
+  Emits a CLEAN / OVERLAP / REVERT verdict plus structured findings. Triggers on:
+  "does this PR revert a previous fix", "check PR for regression risk",
+  "find regression risks in PR", "is this change reverting a bug fix".
+  Do NOT use for: assessing ship-readiness of a release branch (use
+  release-readiness), investigating CI failures (use azdo-build-investigator),
+  or general code review (use code-review).
+metadata:
+  author: dotnet-maui
+  version: "1.0"
+compatibility: Requires PowerShell (pwsh), git, and GitHub CLI (gh) authenticated against the target repository.
+---
+
 # find-regression-risk
 
 Detects potential regression risks in a PR by cross-referencing removed lines against lines added by recent labeled bug-fix PRs.
@@ -37,6 +55,9 @@ pwsh -NoProfile -Command '& ./.github/scripts/Find-RegressionRisks.ps1 -PRNumber
 | `-BaseBranch` | No | `main` | Base branch for `git log` scope |
 | `-OutputDir` | No | — | Directory for output files |
 | `-WriteInlineFindings` | No | off | Emit `inline-findings.json` |
+| `-DiffFile` | No | live PR diff | Frozen diff of the current PR; historical fix diffs are fetched normally |
+| `-ChangedPathsFile` | No | live auto-detection | Frozen JSON array of changed file paths |
+| `-StrictEvidence` | No | off | Fail on unavailable history/API evidence instead of reporting no match |
 
 ## Outputs
 
@@ -57,6 +78,11 @@ When REVERT risks are detected, the regression tests from the reverted fix PRs a
 - **Unit/XAML tests** → `dotnet test <project> --filter <filter>`
 
 The expert reviewer agent (`maui-expert-reviewer.md`, dimension #6) reads `risks.json` to check for REVERT entries.
+
+The standalone `/review expert-review` gh-aw collector supplies its frozen diff,
+changed paths and pinned base with `-StrictEvidence`. Collection failures become explicit
+evidence gaps, not CLEAN results. It inspects regression-test source but does not
+execute any of those tests.
 
 ## Known Limitations
 
